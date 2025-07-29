@@ -11,19 +11,6 @@ COLOR_MAP = {
     'G': 'blue',
     'C': 'yellow'
 }
-
-# Barcode generation logic
-def generate_barcode(sequence):
-    sequence = sequence.upper()
-    fig, ax = plt.subplots(figsize=(len(sequence) * 0.2, 2))
-    for i, base in enumerate(sequence):
-        color = COLOR_MAP.get(base, 'gray')
-        ax.add_patch(plt.Rectangle((i, 0), 1, 1, color=color))
-    ax.set_xlim(0, len(sequence))
-    ax.set_ylim(0, 1)
-    ax.axis('off')
-    return fig
-
 # Main UI class
 class DNABarcodeApp:
     def __init__(self, root):
