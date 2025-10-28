@@ -1,100 +1,148 @@
 import os
 import json
+import tkinter as tk
+from tkinter import filedialog, messagebox, Toplevel, ttk
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from tkinter import filedialog, messagebox, Toplevel, ttk
-import tkinter as tk  # ✅ Required for tk.Canvas and tk widgets
 from PIL import Image, ImageTk
 
-# Backend class to connect with the UI
 class DNABarcodeBackend:
     def __init__(self, ui):
         self.ui = ui
         self.figure = None
         self.canvas = None
-        self.storage_file = "saved_barcodes.json"
         self.saved_dir = "saved_barcodes"
+        self.records_file = os.path.join(self.saved_dir, "records.json")
         os.makedirs(self.saved_dir, exist_ok=True)
+        # create records file if missing
+        if not os.path.exists(self.records_file):
+            with open(self.records_file, "w") as f:
+                json.dump([], f)
         self.bind_ui_actions()
 
     def bind_ui_actions(self):
+        """Attach UI button commands and configure menu entries."""
+        # Buttons
         self.ui.load_button.config(command=self.load_from_file)
         self.ui.generate_button.config(command=self.generate_barcode)
-        self.ui.save_button.config(command=self.save_barcode)
+        self.ui.save_button.config(command=self.save_barcode_dialog)  # Save As flow
         self.ui.clear_button.config(command=self.clear_all)
-        self.ui.menu_saved.entryconfig("📂 View Saved Barcodes", command=self.view_saved_barcodes)
-        self.ui.menu_generate.entryconfig("🧬 Generate New Barcode", command=self.show_main_frame)
+
+        # Menus: they were created with one entry each (index 0). Configure them by index.
+        try:
+            self.ui.menu_saved.entryconfigure(0, command=self.view_saved_barcodes)
+            self.ui.menu_generate.entryconfigure(0, command=self.show_main_frame)
+        except Exception:
+            # If menus are not available yet, ignore (they will be configured when UI shown)
+            pass
 
     def load_from_file(self):
-        file_path = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt"), ("FASTA Files", "*.fasta")])
-        if file_path:
-            try:
-                with open(file_path, 'r') as f:
-                    content = f.read().strip()
-                    self.ui.sequence_text.delete("1.0", "end")
-                    self.ui.sequence_text.insert("1.0", content)
-                    self.ui.status_var.set(f"Loaded file: {file_path}")
-            except Exception as e:
-                messagebox.showerror("Error", f"Could not read file:\n{str(e)}")
+        path = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt"), ("FASTA Files", "*.fasta")])
+        if not path:
+            return
+        try:
+            with open(path, "r") as f:
+                content = f.read().strip()
+            self.ui.sequence_text.delete("1.0", "end")
+            self.ui.sequence_text.insert("1.0", content)
+            self.ui.status_var.set(f"Loaded sequence from {os.path.basename(path)}")
+        except Exception as e:
+            messagebox.showerror("Load Error", str(e))
 
     def generate_barcode(self):
-        sequence = self.ui.sequence_text.get("1.0", "end").strip().upper()
-        if not sequence or not all(base in "ATGC" for base in sequence):
-            messagebox.showerror("Invalid Input", "Sequence must contain only A, T, G, C characters.")
+        seq = self.ui.sequence_text.get("1.0", "end").strip().upper()
+        if not seq:
+            messagebox.showwarning("Empty Sequence", "Please enter or load a DNA sequence first.")
+            return
+        if not all(ch in "ATGC" for ch in seq):
+            messagebox.showerror("Invalid Sequence", "Sequence must contain only A, T, G, C characters.")
             return
 
-        color_map = {'A': 'red', 'T': 'green', 'G': 'blue', 'C': 'yellow'}
-        self.figure, ax = plt.subplots(figsize=(len(sequence) * 0.2, 2))
-        for i, base in enumerate(sequence):
+        color_map = {'A':'#e6194b', 'T':'#3cb44b', 'G':'#4363d8', 'C':'#ffe119'}  # nicer colors
+        # make figure width scale reasonably (min width 6)
+        width = max(6, len(seq) * 0.2)
+        self.figure, ax = plt.subplots(figsize=(width, 2))
+        for i, base in enumerate(seq):
             ax.add_patch(plt.Rectangle((i, 0), 1, 1, color=color_map.get(base, 'gray')))
-        ax.set_xlim(0, len(sequence))
+        ax.set_xlim(0, len(seq))
         ax.set_ylim(0, 1)
         ax.axis('off')
 
+        # display in UI preview_frame
         if self.canvas:
             self.canvas.get_tk_widget().destroy()
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.ui.preview_frame)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill='both', expand=True)
-
         self.ui.status_var.set("Barcode generated successfully.")
 
-    def save_barcode(self):
+    def save_barcode_dialog(self):
+        """Open Save As dialog inside saved_barcodes folder, save image + sequence txt, and record metadata."""
         if not self.figure:
             messagebox.showwarning("No Barcode", "Please generate a barcode first.")
             return
 
-        sequence = self.ui.sequence_text.get("1.0", "end").strip().upper()
-        filename = f"{self.saved_dir}/barcode_{len(sequence)}_{hash(sequence) % 100000}.png"
+        # suggested base name from first 12 chars of sequence
+        seq = self.ui.sequence_text.get("1.0", "end").strip().upper()
+        safe_name = "".join(ch for ch in seq[:12] if ch.isalnum())
+        default_name = f"barcode_{safe_name or 'seq'}"
+
+        initial_dir = os.path.abspath(self.saved_dir)
+        os.makedirs(initial_dir, exist_ok=True)
+
+        file_path = filedialog.asksaveasfilename(
+            title="Save Barcode Image As",
+            defaultextension=".png",
+            filetypes=[("PNG Image", "*.png")],
+            initialdir=initial_dir,
+            initialfile=default_name + ".png"
+        )
+        if not file_path:
+            return  # user cancelled
+
         try:
-            self.figure.savefig(filename)
-            self.save_metadata(sequence, filename)
-            self.ui.status_var.set(f"Barcode saved to {filename}")
+            # save image
+            self.figure.savefig(file_path)
+            # save sequence to .txt with same base name
+            base, _ = os.path.splitext(os.path.basename(file_path))
+            seq_path = os.path.join(initial_dir, base + ".txt")
+            with open(seq_path, "w") as f:
+                f.write(seq)
+
+            # add metadata record
+            self._append_record(sequence=seq, image_path=file_path, seq_path=seq_path)
+            self.ui.status_var.set(f"Saved: {os.path.basename(file_path)}")
+            messagebox.showinfo("Saved", f"Image and sequence saved to:\n{file_path}\n{seq_path}")
         except Exception as e:
             messagebox.showerror("Save Error", str(e))
 
-    def save_metadata(self, sequence, filepath):
-        data = []
-        if os.path.exists(self.storage_file):
-            with open(self.storage_file, 'r') as f:
-                data = json.load(f)
-        data.append({"sequence": sequence, "image": filepath})
-        with open(self.storage_file, 'w') as f:
-            json.dump(data, f, indent=2)
+    def _append_record(self, sequence, image_path, seq_path):
+        try:
+            with open(self.records_file, "r") as f:
+                records = json.load(f)
+        except Exception:
+            records = []
+        records.append({"sequence": sequence, "image": image_path, "sequence_file": seq_path})
+        with open(self.records_file, "w") as f:
+            json.dump(records, f, indent=2)
 
     def view_saved_barcodes(self):
-        if not os.path.exists(self.storage_file):
-            messagebox.showinfo("No Records", "No barcodes have been saved yet.")
-            return
+        """Open a window listing saved barcodes with preview thumbnails."""
+        try:
+            with open(self.records_file, "r") as f:
+                records = json.load(f)
+        except Exception:
+            records = []
 
-        with open(self.storage_file, 'r') as f:
-            records = json.load(f)
+        if not records:
+            messagebox.showinfo("No Saved Barcodes", "No saved barcodes found.")
+            return
 
         viewer = Toplevel(self.ui.root)
         viewer.title("Saved DNA Barcodes")
-        viewer.geometry("700x500")
+        viewer.geometry("800x600")
 
-        frame = ttk.Frame(viewer, padding=10)
+        frame = ttk.Frame(viewer, padding=8)
         frame.pack(fill='both', expand=True)
 
         canvas = tk.Canvas(frame)
@@ -102,27 +150,41 @@ class DNABarcodeBackend:
         scroll_frame = ttk.Frame(canvas)
 
         scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.create_window((0,0), window=scroll_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
 
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        for rec in records:
-            sub = ttk.Frame(scroll_frame, relief="ridge", padding=10)
-            sub.pack(pady=5, fill='x')
+        for rec in records[::-1]:  # newest first
+            sub = ttk.Frame(scroll_frame, relief="ridge", padding=8)
+            sub.pack(fill='x', pady=6)
 
-            seq_label = ttk.Label(sub, text=f"Sequence: {rec['sequence'][:60]}...", wraplength=600, justify='left')
-            seq_label.pack(anchor="w")
+            seq_short = (rec.get("sequence")[:80] + '...') if len(rec.get("sequence",""))>80 else rec.get("sequence","")
+            ttk.Label(sub, text=f"Sequence: {seq_short}", wraplength=600, justify='left').pack(anchor='w')
 
-            try:
-                img = Image.open(rec['image']).resize((300, 60))
-                img_tk = ImageTk.PhotoImage(img)
-                img_label = ttk.Label(sub, image=img_tk)
-                img_label.image = img_tk  # Keep reference
-                img_label.pack(pady=5)
-            except Exception as e:
-                ttk.Label(sub, text="[Image Not Found]").pack()
+            img_path = rec.get("image")
+            if img_path and os.path.exists(img_path):
+                try:
+                    thumb = Image.open(img_path)
+                    thumb.thumbnail((500,120))
+                    thumb_tk = ImageTk.PhotoImage(thumb)
+                    lbl = ttk.Label(sub, image=thumb_tk)
+                    lbl.image = thumb_tk  # keep reference
+                    lbl.pack(pady=6)
+                except Exception:
+                    ttk.Label(sub, text="[Unable to load thumbnail]").pack()
+            else:
+                ttk.Label(sub, text="[Image not found]").pack()
+
+            # add a button to open the image file in default viewer
+            def _open_file(p=img_path):
+                try:
+                    os.startfile(p)
+                except Exception as e:
+                    messagebox.showerror("Open Error", str(e))
+            open_btn = ttk.Button(sub, text="Open Image", command=_open_file)
+            open_btn.pack(anchor='e')
 
     def clear_all(self):
         self.ui.sequence_text.delete("1.0", "end")
@@ -132,9 +194,11 @@ class DNABarcodeBackend:
         self.ui.status_var.set("Cleared.")
 
     def show_main_frame(self):
-        self.ui.sequence_text.delete("1.0", "end")
-        if self.canvas:
-            self.canvas.get_tk_widget().destroy()
-            self.canvas = None
-        self.ui.status_var.set("Ready")
-        self.ui.main_frame.pack(fill='both', expand=True)
+        """If called from menu, ensure main UI is visible (useful if cover still shown)."""
+        # If cover is still up, simulate pressing Enter
+        if getattr(self.ui, "cover_frame", None) and self.ui.cover_frame.winfo_ismapped():
+            self.ui.show_main_ui()
+        else:
+            # ensure main frame visible
+            self.ui.main_frame.pack(fill="both", expand=True)
+            self.ui.status_var.set("Ready")
